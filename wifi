@@ -1,0 +1,172 @@
+#!/bin/bash
+
+# Variables de configuracion -------------------------------------
+WLAN="wlp3s0"
+# Variables globales ---------------------------------------------
+mostrar_ayuda=false
+listar_disponibles_completo=false
+listar_disponibles_essid=false
+conectar=false
+
+# -m <modo>
+metodo="none"
+
+# -e <essid>
+ingreso_essid=false
+essid=""
+
+# -k <key>
+ingreso_key=false
+key=""
+
+# -f <wpa_file_conf> 
+ingreso_conf_file=false
+CONF_FILE_SET=""
+
+# Internos
+BASEDIR=$(dirname $0)
+CONF_TEMP_FILE="$BASEDIR/temporal.cfg"
+
+# ----------------------------------------------------------------
+# Funciones
+
+function show_ayuda {
+	echo ''
+	echo -e "\e[4mScript '\e[32m$0\e[24m'\e[39m"
+	echo ''
+	echo "Permite conectarse a una red WIFI, utilizando la interfaz $WLAN, o listar las redes que alcanza."
+	echo 'El script admite los siguientes parametros:'
+	echo ''
+	echo '	-h         --> Muestra esta ayuda.'
+	echo '	-l         --> Lista las redes WIFI disponibles con todos sus datos.'
+	echo '	-le        --> Lista las redes WIFI disponibles mostrando solo su SSID.'
+	echo '	-m <modo>  --> Se conecta a la red WIFI con modo de seguridad <modo>.'
+	echo '		       <modo> pueden ser: "wpa", "wep" y "none" (sin comillas). Por defecto es "none".'
+	echo '	-e <essid> --> Se conecta a la red WIFI identificada por el SSID <essid>.'
+	echo '	-k <key>   --> Se conecta a la red WIFI utilizando el password <key>. Este parametro no es requerido con modo <none>.'
+	echo '	-f         --> Especifica que archivo de configuracion wpa utilizar, en vez de ingresar essid y key.'
+	echo '		       Solo tiene efecto con "-m wpa".'
+	echo '			Parametros:'
+	echo '				  -f <wpa_file_conf>'
+	echo ''
+
+}
+
+function vaciar_o_crear_conf_temp_file {
+	if [ ! -f "$CONF_TEMP_FILE" ] ; then
+		touch $CONF_TEMP_FILE
+		chmod 600 $CONF_TEMP_FILE
+	fi
+	> $CONF_TEMP_FILE
+}
+
+# Procesamiento de parametros ------------------------------------
+
+ARGC=$#
+i=1
+while [ $i -le $ARGC ]; do
+	if [ "${!i}" == "-h" ]; then
+		mostrar_ayuda=true
+	fi
+	if [ "${!i}" == "-l" ]; then
+                listar_disponibles_completo=true
+        fi
+	if [ "${!i}" == "-le" ]; then
+                listar_disponibles_essid=true
+        fi
+	if [ "${!i}" == "-m" ]; then
+                conectar=true
+		i=$((i+1))
+		if [ $i -le $ARGC ]; then
+			metodo="${!i}"
+		else
+			echo 'Comando incompleto, se esperaba metodo(WPA,WEP)'
+			exit 1
+		fi		
+	fi
+	if [ "${!i}" == "-e" ]; then
+                conectar=true
+		ingreso_essid=true
+		i=$((i+1))
+		if [ $i -le $ARGC ]; then
+			essid="${!i}"
+		else
+			echo 'Comando incompleto, se esperaba essid.'
+			exit 1
+		fi
+	fi
+	if [ "${!i}" == "-k" ]; then
+                conectar=true
+		ingreso_key=true
+		i=$((i+1))
+		if [ $i -le $ARGC ]; then
+                	key="${!i}"
+        	else
+			echo 'Comando incompleto, se esperaba clave.'
+			exit 1
+		fi
+	fi
+	if [ "${!i}" == "-f" ]; then
+                conectar=true
+                ingreso_conf_file=true
+		i=$((i+1))
+		if [ $i -le $ARGC ]; then
+			CONF_FILE_SET="${!i}"
+		else
+			echo 'Comando incompleto, con -f se esperaba el "archivo wpa_file_conf".'
+			exit 1 
+		fi
+        fi
+	i=$((i+1))
+done
+
+# MAIN -----------------------------------------------------
+
+if [ $mostrar_ayuda == true ]; then
+	show_ayuda
+elif [ $listar_disponibles_completo == true ]; then
+	ifconfig $WLAN up
+	iwlist $WLAN scan
+elif [ $listar_disponibles_essid == true ]; then
+	ifconfig $WLAN up
+	iwlist $WLAN scan | grep "ESSID"
+elif [ $conectar == true ]; then
+	ifconfig $WLAN up
+	ifconfig $WLAN
+	dhclient -r
+	if [ $metodo == "wpa" ]; then
+		if [ $ingreso_conf_file == true ]; then
+			wpa_supplicant -B -Dwext -i$WLAN -c $CONF_FILE_SET
+		elif [ $ingreso_essid == true ] && [ $ingreso_key == true ]; then
+			vaciar_o_crear_conf_temp_file
+			wpa_passphrase "$essid" $key > $CONF_TEMP_FILE 
+			wpa_supplicant -B -Dwext -i$WLAN -c $CONF_TEMP_FILE
+		else
+			echo 'Para conectarse con "wpa" se debe ingresar:'
+			echo '						   ESSID (-e <essid>) y KEY (-k <key>).'
+			echo '						 o'
+			echo '						   Archivo (-f <wpa_file_conf>).'
+			echo ''
+			exit 1
+		fi
+		dhclient $WLAN
+	elif [ $metodo == "wep" ]; then
+		if [ $ingreso_essid == true ] && [ $ingreso_key == true ]; then
+			iwconfig $WLAN essid "$essid" key s:$key
+			dhclient $WLAN
+		else
+			echo 'Para conexiones de tipo "wep" se debe ingresar ESSID (-e <essid>) y KEY (-k <key>).'
+			exit 1
+		fi
+	elif [ $metodo == "none" ]; then
+		iwconfig $WLAN essid "$essid"
+		dhclient $WLAN
+	else
+		echo "No se reconoce el metodo $metodo, solo se acepta 'wpa', 'wep' o 'none'."
+		exit 1
+	fi
+else 
+	echo "Comando utilizado incorrectamente."
+	show_ayuda
+fi
+
